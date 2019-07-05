@@ -47,8 +47,15 @@ configfile: "config.json"
 # COMMON VARIABLES
 SAMPLES_TSV     = config['samples_tsv'] if 'samples_tsv' in config else ""
 CONDITION_COL   = "condition"
-CONDITION_A     = config['diff_analysis']['condition']['A']
-CONDITION_B     = config['diff_analysis']['condition']['B']
+CONDITION={}
+CONDITION = config['diff_analysis']['condition']
+NB_CONDITION     = len(CONDITION)
+TAB_CONDITION=['']
+for i in range(0,NB_CONDITION,1):
+	if i==0:
+		TAB_CONDITION[i]=CONDITION[str(i)]
+	else:
+	    TAB_CONDITION.append(CONDITION[str(i)])
 PVALUE_MAX      = config['diff_analysis']['pvalue_threshold']
 LOG2FC_MIN      = config['diff_analysis']['log2fc_threshold']
 MIN_REC         = config['dekupl_counter']['min_recurrence']
@@ -73,20 +80,20 @@ TMP_DIR         = temp(TMP_DIR + "/dekupl_tmp")
 GENE_EXP_DIR    = OUTPUT_DIR + "/gene_expression"
 KALLISTO_DIR    = GENE_EXP_DIR + "/kallisto"
 COUNTS_DIR      = OUTPUT_DIR + "/kmer_counts"
-KMER_DE_DIR     = OUTPUT_DIR + "/" + CONDITION_A + "_vs_" + CONDITION_B + "_kmer_counts"
+KMER_DE_DIR     = OUTPUT_DIR + "/CONDITIONS_kmer_counts"
 METADATA_DIR    = OUTPUT_DIR + "/metadata"
 REFERENCE_DIR   = OUTPUT_DIR + "/references"
 LOGS            = OUTPUT_DIR + "/Logs"
 
-# FILES
+#~ # FILES
 RAW_COUNTS                  = COUNTS_DIR    + "/raw-counts.tsv.gz"
 MASKED_COUNTS               = COUNTS_DIR    + "/masked-counts.tsv.gz"
 NORMALIZATION_FACTORS       = COUNTS_DIR  + "/normalization_factors.tsv"
-DIFF_COUNTS                 = KMER_DE_DIR   + "/diff-counts.tsv.gz"
+DIFF_COUNTS                 = KMER_DE_DIR   + "/diff-counts"
 PVALUE_ALL                  = KMER_DE_DIR   + "/raw_pvals.txt.gz"
-MERGED_DIFF_COUNTS          = KMER_DE_DIR   + "/merged-diff-counts.tsv.gz"
-ASSEMBLIES_FASTA            = KMER_DE_DIR   + "/merged-diff-counts.fa.gz"
-ASSEMBLIES_BAM              = KMER_DE_DIR   + "/merged-diff-counts.bam"
+MERGED_DIFF_COUNTS          = KMER_DE_DIR   + "/merged-diff-counts"
+ASSEMBLIES_FASTA            = KMER_DE_DIR   + "/merged-diff-counts"
+ASSEMBLIES_BAM              = KMER_DE_DIR   + "/merged-diff-counts"
 SAMPLE_CONDITIONS           = METADATA_DIR  + "/sample_conditions.tsv"
 SAMPLE_CONDITIONS_FULL      = METADATA_DIR  + "/sample_conditions_full.tsv"
 DEFAULT_TRANSCRIPTS         = "".join(REFERENCE_DIR + "/gencode.v24.transcripts.fa.gz")
@@ -96,7 +103,7 @@ TRANSCRIPT_TO_GENE_MAPPING  = config['transcript_to_gene'] if 'transcript_to_gen
 KALLISTO_INDEX              = REFERENCE_DIR + "/" + getbasename(REF_TRANSCRIPT_FASTA) + "-kallisto.idx"
 TRANSCRIPT_COUNTS           = KALLISTO_DIR  + "/transcript_counts.tsv.gz"
 GENE_COUNTS                 = KALLISTO_DIR  + "/gene_counts.tsv.gz"
-DEGS                        = GENE_EXP_DIR  + "/" + CONDITION_A + "vs" + CONDITION_B + "-DEGs.tsv"
+DEGS                        = GENE_EXP_DIR  + "/DEGs"
 CHECKING_PLOTS              = KMER_DE_DIR   + "/checking_plots.pdf"
 DIST_MATRIX                 = GENE_EXP_DIR  + "/clustering_of_samples.pdf"
 NORMALIZED_COUNTS           = GENE_EXP_DIR  + "/normalized_counts.tsv"
@@ -161,21 +168,28 @@ if platform == "darwin":
 # GET THE METHOD USED FOR DETECT DE KMERS
 if DIFF_METHOD == "DESeq2":
     TEST_DIFF_SCRIPT   = BIN_DIR + "/DESeq2_diff_method.R"
+    if NB_CONDITION >2:
+        sys.exit("Dekupl can't run DESeq2 with more than 2 conditions, possible choice is 'limma-voom'")
 elif DIFF_METHOD == "Ttest":
     TEST_DIFF_SCRIPT   = BIN_DIR + "/Ttest_diff_method.R"
+    if NB_CONDITION >2:
+        sys.exit("Dekupl can't run DESeq2 with more than 2 conditions, possible choice is 'limma-voom'")
 else:
     sys.exit("Invalid value for 'diff_method', possible choices are: 'DESeq2' and 'Ttest'")
 
 # AUTOMATICALLY SET GENE DIFF METHOD TO LIMMA-VOOM IF MORE THAN 100 SAMPLES
 if 'gene_diff_method' not in config :
-    if len(SAMPLE_NAMES) <= 100:
+    if len(SAMPLE_NAMES) <= 100 and NB_CONDITION == 2:
         GENE_DIFF_METH = "DESeq2"
+        
     else:
         GENE_DIFF_METH = "limma-voom"
 
 # GET THE METHOD USED FOR DIFFERENTIAL GENE EXPRESSION (DEGs)
 if GENE_DIFF_METH == "DESeq2":
     GENE_TEST_DIFF_SCRIPT   = DESEQ2_DEG
+    if NB_CONDITION >2:
+        sys.exit("Dekupl can't run DESeq2 with more than 2 conditions, possible choice is 'limma-voom'")
 elif GENE_DIFF_METH == "limma-voom":
     GENE_TEST_DIFF_SCRIPT   = LIMMA_VOOM_DEG
 else:
@@ -214,8 +228,8 @@ onstart:
     sys.stderr.write("MIN_REC_AB  = " + str(MIN_REC_AB) + "\n")
 
     sys.stderr.write("\n* Diff analysis\n")
-    sys.stderr.write("CONDITION_A    = " + CONDITION_A + "\n")
-    sys.stderr.write("CONDITION_B    = " + CONDITION_B + "\n")
+    for i in range(0,NB_CONDITION,1):
+        sys.stderr.write("CONDITION_"+str(i)+" = "+str(TAB_CONDITION[i])+"\n")
     sys.stderr.write("PVALUE_MAX     = " + str(PVALUE_MAX) + "\n")
     sys.stderr.write("LOG2FC_MIN     = " + str(LOG2FC_MIN) + "\n")
     sys.stderr.write("DIFF_METHOD    = " + DIFF_METHOD + "\n")
@@ -468,8 +482,8 @@ rule differential_gene_expression:
     sample_conditions = SAMPLE_CONDITIONS
   params:
     condition_col = CONDITION_COL,
-    condition_A = CONDITION_A,
-    condition_B = CONDITION_B
+    condition_A = TAB_CONDITION[0],
+    condition_B = TAB_CONDITION[1]
   output:
     differentially_expressed_genes  = DEGS,
     #dist_matrix			            = DIST_MATRIX,
@@ -634,8 +648,8 @@ rule test_diff_counts:
     #tmp_dir     = TMP_DIR + "/test_diff"
     #tmp_dir     = temp(TMP_DIR + "/test_diff")
   params:
-    conditionA  = CONDITION_A,
-    conditionB  = CONDITION_B,
+    conditionA  = TAB_CONDITION[0],
+    conditionB  = TAB_CONDITION[1],
     pvalue_threshold = PVALUE_MAX,
     log2fc_threshold = LOG2FC_MIN,
     chunk_size = CHUNK_SIZE,
