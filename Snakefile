@@ -73,6 +73,7 @@ FRAG_LENGTH     = config['fragment_length'] if 'fragment_length' in config else 
 FRAG_STD_DEV    = config['fragment_standard_deviation'] if 'fragment_standard_deviation' in config else 30
 OUTPUT_DIR      = config['output_dir']
 FASTQ_DIR       = config['fastq_dir']
+CONTRAST        = config['contrast']    if 'contrast'     in config else "NA"
 
 # DIRECTORIES
 BIN_DIR         = workflow.basedir + "/bin"
@@ -174,14 +175,15 @@ elif DIFF_METHOD == "Ttest":
     TEST_DIFF_SCRIPT   = BIN_DIR + "/Ttest_diff_method.R"
     if NB_CONDITION >2:
         sys.exit("Dekupl can't run DESeq2 with more than 2 conditions, possible choice is 'limma-voom'")
+elif DIFF_METHOD == "limma-voom":
+    TEST_DIFF_SCRIPT   = BIN_DIR + "/limma-voom_diff_method.R"
 else:
-    sys.exit("Invalid value for 'diff_method', possible choices are: 'DESeq2' and 'Ttest'")
+    sys.exit("Invalid value for 'diff_method', possible choices are: 'DESeq2','Ttest' and 'limma-voom'")
 
 # AUTOMATICALLY SET GENE DIFF METHOD TO LIMMA-VOOM IF MORE THAN 100 SAMPLES
 if 'gene_diff_method' not in config :
     if len(SAMPLE_NAMES) <= 100 and NB_CONDITION == 2:
         GENE_DIFF_METH = "DESeq2"
-        
     else:
         GENE_DIFF_METH = "limma-voom"
 
@@ -648,12 +650,12 @@ rule test_diff_counts:
     #tmp_dir     = TMP_DIR + "/test_diff"
     #tmp_dir     = temp(TMP_DIR + "/test_diff")
   params:
-    conditionA  = TAB_CONDITION[0],
-    conditionB  = TAB_CONDITION[1],
+    conditions  = TAB_CONDITION,
     pvalue_threshold = PVALUE_MAX,
     log2fc_threshold = LOG2FC_MIN,
     chunk_size = CHUNK_SIZE,
     tmp_dir = TMP_DIR + "/test_diff",
+    contrast= CONTRAST,
   threads: MAX_CPU
   log: LOGS + "/test_diff_counts.logs"
   shell: 
@@ -664,14 +666,14 @@ rule test_diff_counts:
         {input.sample_conditions} \
         {params.pvalue_threshold} \
         {params.log2fc_threshold} \
-        {params.conditionA} \
-        {params.conditionB} \
         {threads} \
         {params.chunk_size} \
         {params.tmp_dir} \
         {output.diff_counts} \
         {output.pvalue_all} \
-        {log}
+        {log} \
+        {params.contrast} \
+        {params.conditions}
         """
 
 rule merge_tags:

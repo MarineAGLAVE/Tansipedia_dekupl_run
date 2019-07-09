@@ -27,6 +27,8 @@
 library("data.table")
 library("foreach")
 library("doParallel")
+library("limma")
+library("edgeR")
 library("DESeq2")
 
 args <- commandArgs(TRUE)
@@ -44,25 +46,25 @@ chunk_size                = as.numeric(args[7])#snakemake@params$chunk_size
 output_tmp                = args[8]#snakemake@output$tmp_dir
 output_diff_counts        = args[9]#snakemake@output$diff_counts
 output_pvalue_all         = args[10]#snakemake@output$pvalue_all
-output_log                = args[11]#snakemake@log[[1]]
+output_log                = args[1]#snakemake@log[[1]]
 
-# Get conditions
-conditionA                = args[13]#snakemake@params$conditionA
-conditionB                = args[14]#snakemake@params$conditionB
-
+# Get conditions and contrast
+constrast                 = args[12]#snakemake@contrast
+conditions                = args[13:length(args)]
+print(constrast)
 # Temporary files
 output_tmp_chunks         = paste(output_tmp,"/tmp_chunks/",sep="")
-output_tmp_DESeq2         = paste(output_tmp,"/tmp_DESeq2/",sep="")
-header_kmer_counts         = paste(output_tmp,"/header_kmer_counts.txt",sep="")
+output_tmp_LimmaVoom      = paste(output_tmp,"/tmp_LimmaVoom/",sep="")
+header_kmer_counts        = paste(output_tmp,"/header_kmer_counts.txt",sep="")
 tmp_concat                = paste(output_tmp,"/tmp_concat.txt",sep="")
 adj_pvalue                = paste(output_tmp,"/adj_pvalue.txt.gz",sep="")
-dataDESeq2All             = paste(output_tmp,"/dataDESeq2All.txt.gz",sep="")
-dataDESeq2Filtered        = paste(output_tmp,"/dataDESeq2Filtered.txt.gz",sep="")
+dataLimmaVoomAll          = paste(output_tmp,"/dataLimmaVoomAll.txt.gz",sep="")
+dataLimmaVoomFiltered     = paste(output_tmp,"/dataLimmaVoomFiltered.txt.gz",sep="")
 
 # Create directories
 dir.create(output_tmp, showWarnings = FALSE, recursive = TRUE)
 dir.create(output_tmp_chunks, showWarnings = FALSE, recursive = TRUE)
-dir.create(output_tmp_DESeq2, showWarnings = FALSE, recursive = TRUE)
+dir.create(output_tmp_LimmaVoom, showWarnings = FALSE, recursive = TRUE)
 
 # Function for logging to the output
 logging <- function(str) {
@@ -79,11 +81,11 @@ nbFiles <- function(dir) {
   return(as.numeric(system(paste("ls ", dir, "|grep subfile | wc -l"), intern=TRUE)))
 }
 
-logging("Start DESeq2_diff_methods")
+logging("Start LimmaVoom_diff_methods")
 
 # Check the chunk size
 if(chunk_size > 1000000){
-  logging(paste("Chunks too large for DESeq2 computations, reduce from",chunk_size,"to 1 000 000"))
+  logging(paste("Chunks too large for LimmaVoom computations, reduce from",chunk_size,"to 1 000 000"))
   chunk_size = 1000000
 }
 
@@ -97,8 +99,9 @@ system(paste("rm -f ", output_tmp_chunks, "/*", sep=""))
 system(paste("zcat", kmer_counts, "| head -1 | cut -f2- >", header_kmer_counts))
 
 # SHUFFLE AND SPLIT THE MAIN FILE INTO CHUNKS WITH AUTOINCREMENTED NAMES
-system(paste("zcat", kmer_counts, "| tail -n +2 | shuf | awk -v", paste("chunk_size=", chunk_size,sep=""), "-v", paste("output_tmp_chunks=",output_tmp_chunks,sep=""),
+system(paste("cp",kmer_counts, "tmp_shuff.gz; gunzip tmp_shuff.gz; rm tmp_shuff.gz; zcat", kmer_counts, "| tail -n +2 | shuf --random-source=tmp_shuff | awk -v", paste("chunk_size=", chunk_size,sep=""), "-v", paste("output_tmp_chunks=",output_tmp_chunks,sep=""),
              "'NR%chunk_size==1{OFS=\"\\t\";x=++i\"_subfile.txt.gz\"}{OFS=\"\";print | \"gzip >\" output_tmp_chunks x}'"))
+system("rm tmp_shuff")
 
 logging("Shuffle and split done")
 
@@ -142,52 +145,54 @@ logging(paste("Foreach of the", length(lst_files),"files"))
 ## LOADING PRIOR KNOWN NORMALISATION FACTORS
 colData = read.table(sample_conditions,header=T,row.names=1)
 
-## DESeq2 ANALYSIS ON EACH CHUNKS
+## LimmaVoom ANALYSIS ON EACH CHUNKS
 invisible(foreach(i=1:length(lst_files)) %dopar% {
-            bigTab = read.table(lst_files[i],header=F,stringsAsFactors=F)
+            countData = read.table(lst_files[i],header=F,stringsAsFactors=F)
             #SET TAGS AS ROWNAMES
-            rownames(bigTab)=bigTab[,1]
+            rownames(countData)=countData[,1]
             #REMOVE THE TAG AS A COLUMN
-            bigTab=bigTab[,2:ncol(bigTab)]
-            names(bigTab)=header
+            countData=countData[,2:ncol(countData)]
+            names(countData)=header
+            
+            #PREPATATION OF LIMMA-VOOM
+            #Formating data
+            group=colData$condition
+            dge <- DGEList(count=countData,group=group)
+            #Design
+            design <- model.matrix(~0+group)
+            colnames(design) <- gsub("group", "", colnames(design))
+            #Contrast
+            a= unique(group)
+			len=length(a)
+			x.contrast=matrix(nrow = 1, ncol = 0)
+			b=1
+			for (i in 1:(len-1)){
+			  print(paste(i,a[i], sep=":"))
+			  for (j in (i+1):len){
+				print(paste(j,a[j], sep=":"))
+				x.contrast[b]=paste(a[j],"-",a[i], sep="")
+				print(x.contrast[])
+				b=b+1
+			  }
+			}
+			contr.matrix <-makeContrasts(contrasts=x.contrast,levels=colnames(design))
 
-            countData = as.matrix(bigTab)
-
-            dds <- DESeqDataSetFromMatrix(countData,
-                                          colData = colData,
-                                          design = ~ condition)
-
-            NormCount_names = colnames(bigTab)
-            rm(bigTab);gc()
-
-            #RUN DESEQ2 AND COLLECT DESeq2 results
-
-            #REPLACE SIZE FACTORS by SIZE FACTORS COMPUTED ON
-            #THE ALL DATASET
-            normFactors <- matrix(colData$normalization_factor,
-                                  ncol=ncol(dds),nrow=nrow(dds),
-                                  dimnames=list(1:nrow(dds),1:ncol(dds)),
-                                  byrow = TRUE)
-
-            normalizationFactors(dds) <- normFactors
-
-            #RUN DESeq2
-            dds <- estimateDispersionsGeneEst(dds)
-
-            dds <-  tryCatch(
-                             estimateDispersionsMAP(estimateDispersionsFit(dds)),
-                             error=function(e){
-                                 cat("Error during estimateDispersionsFit, probably a '2-order-of-magnitude' message, trying suggested alterative method\n")
-                                 dispersions(dds) <- mcols(dds)$dispGeneEst
-                                 dds
-                             })
-
-            dds <- nbinomWaldTest(dds)
-            resDESeq2 <- results(dds, pAdjustMethod = "none")
+            #REPLACE SIZE FACTORS by SIZE FACTORS COMPUTED ON THE ALL DATASET
+            normFactors <- c(t(matrix(colData$normalization_factor)))
+            dge$samples$norm.factors <- normFactors
+            
+            #RUN LIMMA-VOOM AND COLLECT Limma-voom results
+            
+            #RUN Limma-voom
+            v <- voom(dge,design)
+            fitLimmaVoom <-lmFit(v)
+            fitLimmaVoom <- contrasts.fit(fitLimmaVoom, contrasts=contr.matrix)
+            fitLimmaVoom <-eBayes(fitLimmaVoom, robust=FALSE)
+            resLimmaVoom <-topTable(fitLimmaVoom, number = nrow(countData))
 
             #COLLECT COUNTS
-            NormCount<- as.data.frame(counts(dds, normalized=TRUE))
-            names(NormCount) <- NormCount_names
+            NormCount<- as.data.frame(cpm(dge, log=F,normalized.lib.sizes=TRUE))
+            names(NormCount) <- colnames(countData)
 
             # WRITE A TSV WITH THIS FORMAT FOR THE CURRENT CHUNK
             # Kmer_ID
@@ -195,20 +200,19 @@ invisible(foreach(i=1:length(lst_files)) %dopar% {
             # meanB
             # log2FC
             # NormCount
-
-            write.table(data.frame(ID=rownames(resDESeq2),
-                                   meanA=rowMeans(NormCount[,rownames(subset(colData, condition == conditionA))]),
-                                   meanB=rowMeans(NormCount[,rownames(subset(colData, condition == conditionB))]),
-                                   log2FC=resDESeq2$log2FoldChange,
+            write.table(data.frame(ID=rownames(resLimmaVoom),
+                                   meanA=rowMeans(NormCount[,rownames(subset(colData, condition == conditions[1]))]),
+                                   meanB=rowMeans(NormCount[,rownames(subset(colData, condition == conditions[2]))]),
+                                   log2FC=resLimmaVoom$logFC,
                                    NormCount),
-                        file=gzfile(paste(output_tmp_DESeq2,i,"_dataDESeq2_part_tmp.gz", sep="")),
+                        file=gzfile(paste(output_tmp_LimmaVoom,i,"_dataLimmaVoom_part_tmp.gz", sep="")),
                         sep="\t",quote=FALSE,
                         row.names = FALSE,
                         col.names = FALSE)
 
             # WRITE PVALUES FOR THE CURRENT CHUNK
-            write.table(data.frame(ID=rownames(resDESeq2),pvalue=resDESeq2$pvalue),
-                        file=gzfile(paste(output_tmp_DESeq2,i,"_pvalue_part_tmp.gz",sep="")),
+            write.table(data.frame(ID=rownames(resLimmaVoom),pvalue=resLimmaVoom$P.Value),
+                        file=gzfile(paste(output_tmp_LimmaVoom,i,"_pvalue_part_tmp.gz",sep="")),
                         sep="\t",quote=FALSE,
                         row.names = FALSE,
                         col.names = FALSE)
@@ -223,17 +227,17 @@ system(paste("rm -rf", output_tmp_chunks))
 logging("Foreach done")
 
 #MERGE ALL CHUNKS PVALUE INTO A FILE
-system(paste("find", output_tmp_DESeq2, "-name '*_pvalue_part_tmp.gz' | xargs cat >", output_pvalue_all))
+system(paste("find", output_tmp_LimmaVoom, "-name '*_pvalue_part_tmp.gz' | xargs cat >", output_pvalue_all))
 
 logging(paste("Pvalues merged into",output_pvalue_all))
 
-#MERGE ALL CHUNKS DESeq2 INTO A FILE
-system(paste("find", output_tmp_DESeq2, "-name '*_dataDESeq2_part_tmp.gz' | xargs cat >", dataDESeq2All))
+#MERGE ALL CHUNKS LimmaVoom INTO A FILE
+system(paste("find", output_tmp_LimmaVoom, "-name '*_dataLimmaVoom_part_tmp.gz' | xargs cat >", dataLimmaVoomAll))
 
-logging(paste("DESeq2 results merged into",dataDESeq2All))
+logging(paste("LimmaVoom results merged into",dataLimmaVoomAll))
 
-# REMOVE DESeq2 CHUNKS RESULTS
-system(paste("rm -rf", output_tmp_DESeq2))
+# REMOVE LimmaVoom CHUNKS RESULTS
+system(paste("rm -rf", output_tmp_LimmaVoom))
 
 #CREATE AND WRITE THE ADJUSTED PVALUE UNDER THRESHOLD WITH THEIR ID
 pvalueAll         = read.table(output_pvalue_all, header=F, stringsAsFactors=F)
@@ -252,19 +256,19 @@ write.table(adjPvalue_dataframe,
 
 logging("Pvalues are adjusted")
 
-#LEFT JOIN INTO dataDESeq2All
+#LEFT JOIN INTO dataLimmaVoomAll
 #GET ALL THE INFORMATION (ID,MEAN_A,MEAN_B,LOG2FC,COUNTS) FOR DE KMERS
-system(paste("echo \"join <(zcat ", adj_pvalue,") <(zcat ", dataDESeq2All," ) | awk 'function abs(x){return ((x < 0.0) ? -x : x)} {if (abs(\\$5) >=", log2fc_threshold, " && \\$2 <= ", pvalue_threshold, ") print \\$0}' | tr ' ' '\t' | gzip > ", dataDESeq2Filtered, "\" | bash", sep=""))
-system(paste("rm", adj_pvalue, dataDESeq2All))
+system(paste("echo \"join <(zcat ", adj_pvalue,") <(zcat ", dataLimmaVoomAll," ) | awk 'function abs(x){return ((x < 0.0) ? -x : x)} {if (abs(\\$5) >=", log2fc_threshold, " && \\$2 <= ", pvalue_threshold, ") print \\$0}' | tr ' ' '\t' | gzip > ", dataLimmaVoomFiltered, "\" | bash", sep=""))
+system(paste("rm", adj_pvalue, dataLimmaVoomAll))
 
 logging("Get counts for pvalues that passed the filter")
 
-#CREATE THE FINAL HEADER USING ADJ_PVALUE AND DATADESeq2ALL ONES AND COMPRESS THE FILE
-# CREATE THE HEADER FOR THE DESeq2 TABLE RESULT
+#CREATE THE FINAL HEADER USING ADJ_PVALUE AND DATALimmaVoomALL ONES AND COMPRESS THE FILE
+# CREATE THE HEADER FOR THE LimmaVoom TABLE RESULT
 
 #SAVE THE HEADER
 system(paste("echo 'tag\tpvalue\tmeanA\tmeanB\tlog2FC' | paste - ", header_kmer_counts," | gzip > ", output_diff_counts))
-system(paste("cat", dataDESeq2Filtered, ">>", output_diff_counts))
-system(paste("rm", dataDESeq2Filtered))
+system(paste("cat", dataLimmaVoomFiltered, ">>", output_diff_counts))
+system(paste("rm", dataLimmaVoomFiltered))
 
 logging("Analysis done")
