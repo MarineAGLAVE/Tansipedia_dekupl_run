@@ -46,12 +46,13 @@ chunk_size                = as.numeric(args[7])#snakemake@params$chunk_size
 output_tmp                = args[8]#snakemake@output$tmp_dir
 output_diff_counts        = args[9]#snakemake@output$diff_counts
 output_pvalue_all         = args[10]#snakemake@output$pvalue_all
-output_log                = args[1]#snakemake@log[[1]]
+output_log                = args[11]#snakemake@log[[1]]
 
 # Get conditions and contrast
-constrast                 = args[12]#snakemake@contrast
-conditions                = args[13:length(args)]
-print(constrast)
+nb_condition              = as.numeric(args[12])#snakemake@nb_condition
+conditions                = args[13:(13+nb_condition-1)]#snakemake@conditions
+contrast                 = args[(13+nb_condition):length(args)]#snakemake@contrast
+
 # Temporary files
 output_tmp_chunks         = paste(output_tmp,"/tmp_chunks/",sep="")
 output_tmp_LimmaVoom      = paste(output_tmp,"/tmp_LimmaVoom/",sep="")
@@ -162,20 +163,15 @@ invisible(foreach(i=1:length(lst_files)) %dopar% {
             design <- model.matrix(~0+group)
             colnames(design) <- gsub("group", "", colnames(design))
             #Contrast
-            a= unique(group)
-			len=length(a)
-			x.contrast=matrix(nrow = 1, ncol = 0)
-			b=1
-			for (i in 1:(len-1)){
-			  print(paste(i,a[i], sep=":"))
-			  for (j in (i+1):len){
-				print(paste(j,a[j], sep=":"))
-				x.contrast[b]=paste(a[j],"-",a[i], sep="")
-				print(x.contrast[])
-				b=b+1
-			  }
-			}
-			contr.matrix <-makeContrasts(contrasts=x.contrast,levels=colnames(design))
+            if ((length(contrast)) == 1){
+               x.contrast=paste(conditions[2],conditions[1],sep="-")
+            }else{
+               x.contrast=contrast
+            }
+            print(x.contrast)
+
+            contr.matrix <-makeContrasts(contrasts=x.contrast,levels=colnames(design))
+
 
             #REPLACE SIZE FACTORS by SIZE FACTORS COMPUTED ON THE ALL DATASET
             normFactors <- c(t(matrix(colData$normalization_factor)))
