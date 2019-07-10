@@ -49,8 +49,8 @@ SAMPLES_TSV     = config['samples_tsv'] if 'samples_tsv' in config else ""
 CONDITION_COL   = "condition"
 CONDITION={}
 CONDITION = config['diff_analysis']['condition']
-NB_CONDITION     = len(CONDITION)
-TAB_CONDITION=['']
+TAB_CONDITION=[''] # transfomation in array
+NB_CONDITION=len(CONDITION)
 for i in range(0,NB_CONDITION,1):
 	if i==0:
 		TAB_CONDITION[i]=CONDITION[str(i)]
@@ -73,8 +73,21 @@ FRAG_LENGTH     = config['fragment_length'] if 'fragment_length' in config else 
 FRAG_STD_DEV    = config['fragment_standard_deviation'] if 'fragment_standard_deviation' in config else 30
 OUTPUT_DIR      = config['output_dir']
 FASTQ_DIR       = config['fastq_dir']
-CONTRAST        = config['contrast']    if 'contrast'     in config else "NA"
-
+CONTRAST        = config['contrast']    if 'contrast'     in config else 'NA'
+TAB_CONTRAST=[''] # transfomation in array
+if CONTRAST == 'NA':
+    TAB_CONTRAST[0]=CONTRAST
+else:
+    flag='false'
+    for key in CONTRAST:
+        key=key.replace('(','\(')
+        key=key.replace(')','\)')
+        if flag == 'false':
+            TAB_CONTRAST[0]=key
+            flag='true'
+        else:
+            TAB_CONTRAST.append(key)
+    
 # DIRECTORIES
 BIN_DIR         = workflow.basedir + "/bin"
 TMP_DIR         = temp(TMP_DIR + "/dekupl_tmp")
@@ -91,7 +104,7 @@ RAW_COUNTS                  = COUNTS_DIR    + "/raw-counts.tsv.gz"
 MASKED_COUNTS               = COUNTS_DIR    + "/masked-counts.tsv.gz"
 NORMALIZATION_FACTORS       = COUNTS_DIR  + "/normalization_factors.tsv"
 DIFF_COUNTS                 = KMER_DE_DIR   + "/diff-counts"
-PVALUE_ALL                  = KMER_DE_DIR   + "/raw_pvals.txt.gz"
+PVALUE_ALL                  = KMER_DE_DIR   + "/raw_pvals"
 MERGED_DIFF_COUNTS          = KMER_DE_DIR   + "/merged-diff-counts"
 ASSEMBLIES_FASTA            = KMER_DE_DIR   + "/merged-diff-counts"
 ASSEMBLIES_BAM              = KMER_DE_DIR   + "/merged-diff-counts"
@@ -232,6 +245,12 @@ onstart:
     sys.stderr.write("\n* Diff analysis\n")
     for i in range(0,NB_CONDITION,1):
         sys.stderr.write("CONDITION_"+str(i)+" = "+str(TAB_CONDITION[i])+"\n")
+    if CONTRAST != 'NA':
+        i=0
+        for key in CONTRAST:
+            sys.stderr.write("CONTRAST n°"+str(i)+" = "+str(key)+"\n")
+            i=i+1
+    sys.stderr.write("CONDITION_ = "+str(CONTRAST)+"\n")
     sys.stderr.write("PVALUE_MAX     = " + str(PVALUE_MAX) + "\n")
     sys.stderr.write("LOG2FC_MIN     = " + str(LOG2FC_MIN) + "\n")
     sys.stderr.write("DIFF_METHOD    = " + DIFF_METHOD + "\n")
@@ -244,7 +263,6 @@ if DATA_TYPE == "RNA-Seq":
 else:
     rule all:
       input: MERGED_DIFF_COUNTS
-
 
 # LOG FUNCTIONS
 def current_date():
@@ -568,7 +586,7 @@ rule jellyfish_dump:
     exec_time = LOGS + "/{sample}_jellyfishDumpRawCounts_exec_time.log"
   run:
     start_log(log['exec_time'], "jellyfish_dump")
-    shell("{JELLYFISH_DUMP} -c {input} | {SORT} -T {TMP_DIR} -k 1 -S {resources.ram}M --parallel {threads}| pigz -p {threads} -c > {output}")
+    shell("{JELLYFISH_DUMP} -c {input} | {SORT} -k 1 -S {resources.ram}M --parallel {threads}| pigz -p {threads} -c > {output}")
     end_log(log['exec_time'], "jellyfish_dump")
 
 rule join_counts:
@@ -617,7 +635,7 @@ rule ref_transcript_dump:
   resources: ram = MAX_MEM_SORT
   run:
     start_log(log['exec_time'], "ref_transcript_dump")
-    shell("{JELLYFISH_DUMP} -c {input} | {SORT} -T {TMP_DIR} -k 1 -S {resources.ram}M --parallel {threads}| pigz -p {threads} -c > {output}")
+    shell("{JELLYFISH_DUMP} -c {input} | {SORT} -k 1 -S {resources.ram}M --parallel {threads}| pigz -p {threads} -c > {output}")
     end_log(log['exec_time'], "ref_transcript_dump")
 
 # 3.3 Filter counter k-mer that are present in the transcriptome set
@@ -651,11 +669,12 @@ rule test_diff_counts:
     #tmp_dir     = temp(TMP_DIR + "/test_diff")
   params:
     conditions  = TAB_CONDITION,
+    nb_condition = NB_CONDITION,
     pvalue_threshold = PVALUE_MAX,
     log2fc_threshold = LOG2FC_MIN,
     chunk_size = CHUNK_SIZE,
     tmp_dir = TMP_DIR + "/test_diff",
-    contrast= CONTRAST,
+    contrast= TAB_CONTRAST
   threads: MAX_CPU
   log: LOGS + "/test_diff_counts.logs"
   shell: 
@@ -672,8 +691,9 @@ rule test_diff_counts:
         {output.diff_counts} \
         {output.pvalue_all} \
         {log} \
-        {params.contrast} \
-        {params.conditions}
+        {params.nb_condition} \
+        {params.conditions} \
+        {params.contrast}
         """
 
 rule merge_tags:
