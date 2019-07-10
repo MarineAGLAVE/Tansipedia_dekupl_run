@@ -37,8 +37,8 @@ chunk_size                = args[7]#snakemake@params$chunk_size
 
 # Get output files  
 output_tmp                = args[8]#snakemake@output$tmp_dir
-output_diff_counts        = args[9]#snakemake@output$diff_counts
-output_pvalue_all         = args[10]#snakemake@output$pvalue_all
+output_diff_counts        = parse(args[9], ".tsv.gz", sep="")#snakemake@output$diff_counts
+output_pvalue_all         = parse(args[10], ".txt.gz", sep="")#snakemake@output$pvalue_all
 output_log                = args[11]#snakemake@log[[1]]
 
 # Get conditions
